@@ -1,0 +1,3 @@
+# One complete URL per line. Blank lines and comments are ignored.
+https://example.com/
+https://example.com/contact?source=audit

@@ -1,0 +1,35 @@
+{
+  "domain": "example.com",
+  "interactions": [
+    {
+      "name": "contact-form-example",
+      "url": "https://example.com/contact",
+      "submissionAllowed": false,
+      "manualReviewRequired": true,
+      "actions": [
+        {
+          "type": "fill",
+          "selector": "#first-name",
+          "value": "Audit"
+        },
+        {
+          "type": "fill",
+          "selector": "#email",
+          "value": "${AUDIT_EMAIL}"
+        },
+        {
+          "type": "check",
+          "selector": "#privacy-consent"
+        },
+        {
+          "type": "click",
+          "selector": "button[type='submit']"
+        },
+        {
+          "type": "wait",
+          "milliseconds": 3000
+        }
+      ]
+    }
+  ]
+}
