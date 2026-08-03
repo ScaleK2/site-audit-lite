@@ -1,0 +1,3 @@
+function add(out,k,v){out[k]??=[];out[k].push(v);try{const x=JSON.parse(v);if(x&&typeof x==='object')out[`${k}.__decoded`]=x}catch{}}
+export function decodeParameters(req){const out={};try{for(const [k,v] of new URL(req.url).searchParams)add(out,k,v)}catch{}const p=req.postData;if(p?.params)for(const x of p.params)add(out,x.name,x.value??x.fileName??'');if(p?.text){try{const j=JSON.parse(p.text);if(j&&typeof j==='object')Object.entries(j).forEach(([k,v])=>add(out,k,typeof v==='string'?v:JSON.stringify(v)))}catch{try{for(const [k,v] of new URLSearchParams(p.text))add(out,k,v)}catch{out._raw=[p.text]}}}return out}
+export const first=(p,...keys)=>{for(const k of keys)if(p[k]?.[0]!=null)return p[k][0];return null}
