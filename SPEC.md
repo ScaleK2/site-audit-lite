@@ -147,3 +147,25 @@ Live smoke tests use harmless pages and never submit forms.
 ## 14. Definition of done
 
 All modes work through the menu and documented CLI; outputs match this contract; tests and safe smoke tests pass; README matches reality; evidence is traceable; secrets do not leak; and the diff contains no live HARs, generated runs, `.env`, credentials, or personal data.
+
+## 15. Progressive evidence clarification
+All modes share one normalisation and reporting pipeline. Required progressive CSV/JSON reports are executive summary, technology inventory, page technology matrix, event inventory, domain inventory, consent diagnostics, unknown technologies, and safe request evidence. `tracking-events.csv` is the simplified aggregated analyst event view, while event-inventory JSON retains request-level interpreted network evidence. Only beacon, conversion, and attribution roles are network events. GA4 requires combined endpoint, `v=2`, valid `G-*`, and host or corroborating payload evidence. Consent signals do not prove state, banner behaviour, or compliance. Live manifests preserve requested/final URLs; unavailable attribution is never fabricated. Default reports omit query values, bodies, cookies, credentials, and client/session identifiers while controlled forensic JSON retains required raw evidence.
+
+## 16. Analyst CSV and runtime evidence clarification
+
+`forms-detected.csv`, `tracking-events.csv`, and `technology-inventory.csv` are
+the primary analyst views. Forms aggregate stable structural signatures and
+flatten field attributes while JSON retains every observation. Tracking CSV
+aggregates meaningful `network`, `dataLayer`, and conservatively `correlated`
+events; detailed network events remain in event-inventory JSON. Technology CSV
+aggregates vendor, product, typed identifier, observed roles, hostnames, party,
+and page/request counts. Exhaustive request evidence remains in JSON.
+
+New captures write a bounded and redacted `.datalayer.json` companion with the
+same deterministic readable stem as its HAR. Correlation requires matching page
+identity and event name within a five-second window; page co-occurrence alone is
+insufficient. Companion absence never prevents legacy HAR analysis.
+
+CLI progress is line-based, written to stderr, truthful for known and evolving
+totals, and supports `--quiet`/`--no-progress`. Stable CSV schemas and headers
+must be emitted even for zero-row reports.
