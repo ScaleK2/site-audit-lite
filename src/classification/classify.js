@@ -1,3 +1,40 @@
-import {exactParser} from './parsers/index.js';import {domainMatch} from './domain-registry.js';
-const asset=/^(?:image|font|stylesheet|script|media)$/i;
-export function classify(r){let x=exactParser(r.request_url,{...r.parameters,_path:new URL(r.request_url).pathname.split('/').filter(Boolean)});if(!x)x=domainMatch(r.hostname);if(!x&&/(analytics|tracking|pixel|metrics|telemetry|ads?)[.-]/i.test(r.hostname))x={vendor:r.hostname,category:'unknown-marketing-tech',classification_method:'inferred_from_domain',classification_confidence:'low'};return Object.assign(r,x||{vendor:null,category:'unknown',classification_method:'unknown',classification_confidence:'low'},{is_tracking:!!x&&!asset.test(r.resource_type||'')&&!['infrastructure','monitoring','security'].includes(x.category)})}
+import { exactParser } from "./parsers/index.js";
+import { domainMatch } from "./domain-registry.js";
+const EVENT_ROLES = new Set(["beacon", "conversion", "attribution"]);
+export function classify(record) {
+  const inferred = /(?:^|\.)(analytics|tracking|pixel|metrics)[.-]/i.test(
+    record.hostname,
+  )
+    ? {
+        vendor: record.hostname,
+        product: "Unresolved technology",
+        category: "unknown-marketing-tech",
+        request_role: "unknown",
+        classification_method: "hostname_inference",
+        classification_confidence: "low",
+      }
+    : null;
+  const match = exactParser(record.request_url, record.parameters) ||
+    domainMatch(record.hostname) ||
+    inferred || {
+      vendor: null,
+      product: null,
+      category: "unknown",
+      request_role: "unknown",
+      classification_method: "unknown",
+      classification_confidence: "low",
+    };
+  const identifiers = match.identifiers || [];
+  return Object.assign(record, match, {
+    identifiers,
+    identifiers_json: identifiers,
+    identifier_type: identifiers[0]?.type || null,
+    identifier_value: identifiers[0]?.value || null,
+    tag_id: identifiers[0]?.value || null,
+    is_tracking: EVENT_ROLES.has(match.request_role),
+    is_tracking_event: EVENT_ROLES.has(match.request_role),
+    consent_signals: ["gcd", "dma", "npa"].filter(
+      (key) => record.parameters?.[key],
+    ),
+  });
+}

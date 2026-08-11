@@ -1,13 +1,194 @@
-import test from'node:test';import assert from'node:assert/strict';import fs from'node:fs/promises';import os from'node:os';import path from'node:path';import{ingestHar}from'../src/har/ingest.js';import{decodeParameters}from'../src/har/parameters.js';import{exactParser}from'../src/classification/parsers/index.js';import{classify}from'../src/classification/classify.js';import{diagnose}from'../src/diagnostics/index.js';import{parseUrlList}from'../src/input/url-list.js';import{loadConfig,maySubmit}from'../src/input/config.js';import{allowedLink}from'../src/capture/links.js';import{createRun,uniqueHarPath}from'../src/output/run.js';import{analyse}from'../src/commands/analyse.js';import{parseArgs}from'../src/cli.js';
-const fixture='test/fixtures/sample.har';
-test('HAR retains all HTTP requests with traceability',async()=>{const r=await ingestHar(fixture);assert.equal(r.length,2);assert.equal(r[0].vendor,'GA4');assert.equal(r[0].tag_id,'G-ABC');assert.equal(r[0].event_name,'purchase');assert.equal(r[1].classification_method,'unknown');assert.equal(r[1].parameters.a.length,2);assert.equal(r[0].page_url,'https://www.example.com/contact')});
-test('parameter decoder handles query form JSON and embedded JSON',()=>{const p=decodeParameters({url:'https://x.test/?a=1&a=2&j=%7B%22x%22%3A1%7D',postData:{text:'b=3&b=4'}});assert.deepEqual(p.a,['1','2']);assert.equal(p['j.__decoded'].x,1);assert.deepEqual(p.b,['3','4'])});
-test('all exact parser families are recognised',()=>{const cases=[['https://google-analytics.com/g/collect',{tid:['G-X']}],['https://googletagmanager.com/gtm.js',{id:['GTM-X']}],['https://googleadservices.com/pagead/conversion',{id:['1']}],['https://fls.doubleclick.net/activityi',{src:['1'],type:['g'],cat:['c'],u1:['x']}],['https://facebook.com/tr/',{id:['1']}],['https://analytics.tiktok.com/i18n/pixel',{id:['1']}],['https://ct.pinterest.com/v3/',{tid:['1']}],['https://linkedin.com/collect',{pid:['1']}],['https://bat.bing.com/action',{ti:['1']}],['https://clarity.ms/collect',{id:['1']}],['https://x.omtrdc.net/b/ss/a/',{}],['https://insights.hotjar.com/api',{}]];for(const[x,p]of cases)assert.equal(exactParser(x,p)?.classification_method,'recognised',x);assert.equal(exactParser(cases[3][0],cases[3][1]).floodlight.custom_variables.u1[0],'x')});
-test('registry, inference, and asset tracking exclusion',()=>{assert.equal(classify({request_url:'https://api.segment.com/x',hostname:'api.segment.com',parameters:{}}).classification_method,'domain_match');assert.equal(classify({request_url:'https://analytics.widgets.test/x',hostname:'analytics.widgets.test',parameters:{}}).classification_method,'inferred_from_domain');assert.equal(classify({request_url:'https://analytics.widgets.test/a.js',hostname:'analytics.widgets.test',parameters:{},resource_type:'script'}).is_tracking,false)});
-test('diagnostics flag duplicates and sensitive types without removal',()=>{const r=[0,1000].map(ms=>({page_url:'x',observation_context:'page_load',request_method:'GET',request_url:'https://x/?ord='+ms,request_timestamp:new Date(ms).toISOString(),parameters:{email:['a@b.com'],phone:['+1 555 555 5555']},classification_method:'unknown'}));diagnose(r);assert.equal(r.length,2);assert.ok(r[1].potential_issues.includes('potential_duplicate'));assert.ok(r[0].potential_issues.includes('possible_email_address'))});
-test('TXT CSV inputs and invalid rows',async()=>{const d=await fs.mkdtemp(path.join(os.tmpdir(),'sal-'));await fs.writeFile(path.join(d,'x.txt'),'# c\nhttps://a.test/\nbad\n');await fs.writeFile(path.join(d,'x.csv'),'name,url\na,https://b.test/\nb,nope\n');assert.deepEqual((await parseUrlList(path.join(d,'x.txt'))).map(x=>x.valid),[true,false]);assert.deepEqual((await parseUrlList(path.join(d,'x.csv'))).map(x=>x.valid),[true,false])});
-test('crawler URL rules are bounded and safe',()=>{assert.equal(allowedLink('/a#x','https://a.test/'),'https://a.test/a');assert.equal(allowedLink('https://sub.a.test/a','https://a.test/'),null);assert.ok(allowedLink('https://sub.a.test/a','https://a.test/',{includeSubdomains:true}));assert.equal(allowedLink('/logout','https://a.test/'),null);assert.equal(allowedLink('/a.png','https://a.test/'),null)});
-test('config substitution, exact URLs and submission guard',async()=>{const d=await fs.mkdtemp(path.join(os.tmpdir(),'sal-')),f=path.join(d,'c.json');await fs.writeFile(f,JSON.stringify({interactions:[{name:'x',url:'https://a.test/p?x=1',submissionAllowed:false,actions:[{type:'fill',selector:'#x',value:'${SAFE}'},{type:'click',selector:'button[type=submit]'}]}]}));const c=await loadConfig(f,{SAFE:'secret'});assert.equal(c.interactions[0].actions[0].value,'secret');assert.ok(maySubmit(c.interactions[0].actions[1]));await assert.rejects(()=>loadConfig(f,{}),/SAFE/)});
-test('run and HAR paths are collision safe',async()=>{const root=await fs.mkdtemp(path.join(os.tmpdir(),'sal-')),a=await createRun({domain:'https://www.Example.com:99',mode:'x',root}),b=await createRun({domain:'example.com',mode:'x',root});assert.notEqual(a.runId,b.runId);assert.equal(a.primaryDomain,'example.com');assert.notEqual(await uniqueHarPath(a,'https://example.com/a?x=1'),await uniqueHarPath(a,'https://example.com/a?x=1'))});
-test('folder analysis continues past malformed HAR',async()=>{const d=await fs.mkdtemp(path.join(os.tmpdir(),'sal-')),out=path.join(d,'out');await fs.copyFile(fixture,path.join(d,'a.har'));await fs.writeFile(path.join(d,'bad.har'),'{');const{x, ...result}=await analyse({harDir:d,outputRoot:out});assert.equal(result.summary.request_count,2);assert.equal(result.summary.error_count,1);assert.equal(result.run.primaryDomain,'example.com')});
-test('CLI stable flags parse',()=>{assert.deepEqual(parseArgs(['capture-site','--url','https://x.test','--include-subdomains']).o,{url:'https://x.test',include_subdomains:true});assert.throws(()=>parseArgs(['x','--url']),/Missing value/)});
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ingestHar } from "../src/har/ingest.js";
+import { decodeParameters } from "../src/har/parameters.js";
+import { exactParser } from "../src/classification/parsers/index.js";
+import { classify } from "../src/classification/classify.js";
+import { diagnose } from "../src/diagnostics/index.js";
+import { parseUrlList } from "../src/input/url-list.js";
+import { loadConfig, maySubmit } from "../src/input/config.js";
+import { allowedLink } from "../src/capture/links.js";
+import { createRun, uniqueHarPath } from "../src/output/run.js";
+import { analyse } from "../src/commands/analyse.js";
+import { parseArgs } from "../src/cli.js";
+const fixture = "test/fixtures/sample.har";
+test("HAR retains all HTTP requests with traceability", async () => {
+  const r = await ingestHar(fixture);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].vendor, "Google");
+  assert.equal(r[0].tag_id, "G-ABC");
+  assert.equal(r[0].event_name, "purchase");
+  assert.equal(r[1].classification_method, "unknown");
+  assert.equal(r[1].parameters.a.length, 2);
+  assert.equal(r[0].page_url, "https://www.example.com/contact");
+});
+test("parameter decoder handles query form JSON and embedded JSON", () => {
+  const p = decodeParameters({
+    url: "https://x.test/?a=1&a=2&j=%7B%22x%22%3A1%7D",
+    postData: { text: "b=3&b=4" },
+  });
+  assert.deepEqual(p.a, ["1", "2"]);
+  assert.equal(p["j.__decoded"].x, 1);
+  assert.deepEqual(p.b, ["3", "4"]);
+});
+test("all exact parser families are recognised", () => {
+  const cases = [
+    [
+      "https://google-analytics.com/g/collect",
+      { v: ["2"], tid: ["G-X"], cid: ["x"] },
+    ],
+    ["https://googletagmanager.com/gtm.js", { id: ["GTM-X"] }],
+    ["https://googleadservices.com/pagead/conversion", { id: ["1"] }],
+    [
+      "https://fls.doubleclick.net/activityi",
+      { src: ["1"], type: ["g"], cat: ["c"], u1: ["x"] },
+    ],
+    ["https://facebook.com/tr/", { id: ["1"] }],
+    ["https://analytics.tiktok.com/i18n/pixel", { id: ["1"] }],
+    ["https://ct.pinterest.com/v3/", { tid: ["1"] }],
+    ["https://linkedin.com/collect", { pid: ["1"] }],
+    ["https://bat.bing.com/action", { ti: ["1"] }],
+    ["https://clarity.ms/collect", { id: ["1"] }],
+    ["https://x.omtrdc.net/b/ss/a/", {}],
+    ["https://insights.hotjar.com/api", {}],
+  ];
+  for (const [x, p] of cases)
+    assert.equal(exactParser(x, p)?.classification_method, "parser", x);
+  assert.equal(
+    exactParser(cases[3][0], cases[3][1]).floodlight.custom_variables.u1[0],
+    "x",
+  );
+});
+test("registry, inference, and asset tracking exclusion", () => {
+  assert.equal(
+    classify({
+      request_url: "https://api.segment.com/x",
+      hostname: "api.segment.com",
+      parameters: {},
+    }).classification_method,
+    "hostname",
+  );
+  assert.equal(
+    classify({
+      request_url: "https://analytics.widgets.test/x",
+      hostname: "analytics.widgets.test",
+      parameters: {},
+    }).classification_method,
+    "hostname_inference",
+  );
+  assert.equal(
+    classify({
+      request_url: "https://analytics.widgets.test/a.js",
+      hostname: "analytics.widgets.test",
+      parameters: {},
+      resource_type: "script",
+    }).is_tracking,
+    false,
+  );
+});
+test("diagnostics flag duplicates and sensitive types without removal", () => {
+  const r = [0, 1000].map((ms) => ({
+    page_url: "x",
+    observation_context: "page_load",
+    request_method: "GET",
+    request_url: "https://x/?ord=" + ms,
+    request_timestamp: new Date(ms).toISOString(),
+    parameters: { email: ["a@b.com"], phone: ["+1 555 555 5555"] },
+    classification_method: "unknown",
+  }));
+  diagnose(r);
+  assert.equal(r.length, 2);
+  assert.ok(r[1].potential_issues.includes("potential_duplicate"));
+  assert.ok(r[0].potential_issues.includes("possible_email_address"));
+});
+test("TXT CSV inputs and invalid rows", async () => {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), "sal-"));
+  await fs.writeFile(path.join(d, "x.txt"), "# c\nhttps://a.test/\nbad\n");
+  await fs.writeFile(
+    path.join(d, "x.csv"),
+    "name,url\na,https://b.test/\nb,nope\n",
+  );
+  assert.deepEqual(
+    (await parseUrlList(path.join(d, "x.txt"))).map((x) => x.valid),
+    [true, false],
+  );
+  assert.deepEqual(
+    (await parseUrlList(path.join(d, "x.csv"))).map((x) => x.valid),
+    [true, false],
+  );
+});
+test("crawler URL rules are bounded and safe", () => {
+  assert.equal(allowedLink("/a#x", "https://a.test/"), "https://a.test/a");
+  assert.equal(allowedLink("https://sub.a.test/a", "https://a.test/"), null);
+  assert.ok(
+    allowedLink("https://sub.a.test/a", "https://a.test/", {
+      includeSubdomains: true,
+    }),
+  );
+  assert.equal(allowedLink("/logout", "https://a.test/"), null);
+  assert.equal(allowedLink("/a.png", "https://a.test/"), null);
+});
+test("config substitution, exact URLs and submission guard", async () => {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), "sal-")),
+    f = path.join(d, "c.json");
+  await fs.writeFile(
+    f,
+    JSON.stringify({
+      interactions: [
+        {
+          name: "x",
+          url: "https://a.test/p?x=1",
+          submissionAllowed: false,
+          actions: [
+            { type: "fill", selector: "#x", value: "${SAFE}" },
+            { type: "click", selector: "button[type=submit]" },
+          ],
+        },
+      ],
+    }),
+  );
+  const c = await loadConfig(f, { SAFE: "secret" });
+  assert.equal(c.interactions[0].actions[0].value, "secret");
+  assert.ok(maySubmit(c.interactions[0].actions[1]));
+  await assert.rejects(() => loadConfig(f, {}), /SAFE/);
+});
+test("run and HAR paths are collision safe", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sal-")),
+    a = await createRun({
+      domain: "https://www.Example.com:99",
+      mode: "x",
+      root,
+    }),
+    b = await createRun({ domain: "example.com", mode: "x", root });
+  assert.notEqual(a.runId, b.runId);
+  assert.equal(a.primaryDomain, "example.com");
+  assert.equal(
+    await uniqueHarPath(a, "https://example.com/a?x=1"),
+    await uniqueHarPath(a, "https://example.com/a?x=1"),
+  );
+});
+test("folder analysis continues past malformed HAR", async () => {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), "sal-")),
+    out = path.join(d, "out");
+  await fs.copyFile(fixture, path.join(d, "a.har"));
+  await fs.writeFile(path.join(d, "bad.har"), "{");
+  const { x, ...result } = await analyse({ harDir: d, outputRoot: out });
+  assert.equal(result.summary.request_count, 2);
+  assert.equal(result.summary.error_count, 1);
+  assert.equal(result.run.primaryDomain, "example.com");
+});
+test("CLI stable flags parse", () => {
+  assert.deepEqual(
+    parseArgs([
+      "capture-site",
+      "--url",
+      "https://x.test",
+      "--include-subdomains",
+    ]).o,
+    { url: "https://x.test", include_subdomains: true },
+  );
+  assert.throws(() => parseArgs(["x", "--url"]), /Missing value/);
+});

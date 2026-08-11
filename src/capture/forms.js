@@ -1,2 +1,107 @@
-export async function detectForms(page,pageUrl){return page.locator('form').evaluateAll((forms,url)=>forms.map((f,index)=>{const css=e=>e.id?`#${CSS.escape(e.id)}`:e.name?`${e.tagName.toLowerCase()}[name="${CSS.escape(e.name)}"]`:e.tagName.toLowerCase();const fields=[...f.querySelectorAll('input,select,textarea')].map(e=>({element:e.tagName.toLowerCase(),input_type:e.type||null,name:e.name||null,id:e.id||null,candidate_selector:css(e),selector_certainty:e.id?'high':e.name?'medium':'low',placeholder:e.placeholder||null,label:e.labels?.[0]?.innerText?.trim()||null,required:e.required,autocomplete:e.autocomplete||null,select_options:e.tagName==='SELECT'?[...e.options].map(o=>({value:o.value,label:o.text})):[]}));const text=(f.innerText+' '+fields.map(x=>[x.name,x.input_type,x.autocomplete].join(' ')).join(' ')).toLowerCase();const kind=/search/.test(text)?'search':/password/.test(text)?(/register|sign.?up/.test(text)?'registration':'login'):/newsletter|subscribe/.test(text)?'newsletter':/checkout|payment/.test(text)?'checkout':/quote/.test(text)?'quote':/application|apply/.test(text)?'application':/contact|message/.test(text)?'contact':'unknown';return {page_url:url,hostname:new URL(url).hostname,form_index:index,form_id:f.id||null,form_name:f.name||null,form_action:f.action||url,form_method:(f.method||'get').toUpperCase(),form_selector:css(f),field_count:fields.length,submit_controls:[...f.querySelectorAll('button,input[type=submit]')].map(css),fields,likely_form_type:kind,classification_confidence:kind==='unknown'?'low':'medium',requires_manual_config:true,notes:'Passive detection only; no values recorded.'}}),pageUrl)}
-export const formTemplate=form=>({url:form.page_url,name:`review-form-${form.form_index}`,submissionAllowed:false,manualReviewRequired:true,actions:form.fields.map(f=>({type:f.input_type==='checkbox'?'check':f.element==='select'?'select':'fill',selector:f.candidate_selector,value:''})),notes:'Generated template requires manual review; contains no real values.'});
+import crypto from "node:crypto";
+
+function normalise(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normaliseAction(value) {
+  try {
+    const url = new URL(value);
+    return url.pathname.replace(/\/+$/, "") || "/";
+  } catch {
+    return normalise(value) || "/";
+  }
+}
+
+export function formSignature(form) {
+  const fields = form.fields.map((field) => [normalise(field.name), normalise(field.input_type || field.element)]);
+  const structure = {
+    method: normalise(form.form_method || "GET"),
+    action: normaliseAction(form.form_action),
+    id: normalise(form.form_id),
+    name: normalise(form.form_name),
+    fields,
+    submits: (form.submit_controls || []).map(normalise).sort(),
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(structure)).digest("hex").slice(0, 16);
+}
+
+export function classifyForm(text, fields) {
+  const haystack = `${text} ${fields.map((field) => [field.name, field.input_type, field.autocomplete].join(" ")).join(" ")}`.toLowerCase();
+  if (/search/.test(haystack)) return "search";
+  if (/password/.test(haystack)) return /register|sign.?up/.test(haystack) ? "registration" : "login";
+  if (/newsletter|subscribe/.test(haystack)) return "newsletter";
+  if (/checkout|payment/.test(haystack)) return "checkout";
+  if (/quote/.test(haystack)) return "quote";
+  if (/application|apply/.test(haystack)) return "application";
+  if (/contact|message/.test(haystack)) return "contact";
+  return "unknown";
+}
+
+export async function detectForms(page, pageUrl) {
+  const forms = await page.locator("form").evaluateAll((nodes, url) => {
+    const selector = (element) => element.id
+      ? `#${CSS.escape(element.id)}`
+      : element.name
+        ? `${element.tagName.toLowerCase()}[name="${CSS.escape(element.name)}"]`
+        : element.tagName.toLowerCase();
+    return nodes.map((form, formIndex) => {
+      const fields = [...form.querySelectorAll("input,select,textarea")].map((field) => ({
+        element: field.tagName.toLowerCase(),
+        input_type: field.type || null,
+        name: field.name || null,
+        id: field.id || null,
+        candidate_selector: selector(field),
+        selector_certainty: field.id ? "high" : field.name ? "medium" : "low",
+        placeholder: field.placeholder || null,
+        label: field.labels?.[0]?.innerText?.trim() || null,
+        required: field.required,
+        autocomplete: field.autocomplete || null,
+        select_options: field.tagName === "SELECT"
+          ? [...field.options].map((option) => ({ value: option.value, label: option.text }))
+          : [],
+      }));
+      return {
+        page_url: url,
+        hostname: new URL(url).hostname,
+        form_index: formIndex,
+        form_id: form.id || null,
+        form_name: form.name || null,
+        form_action: form.action || url,
+        form_method: (form.method || "get").toUpperCase(),
+        form_selector: selector(form),
+        field_count: fields.length,
+        submit_controls: [...form.querySelectorAll("button,input[type=submit]")].map(selector),
+        fields,
+        form_text: form.innerText,
+      };
+    });
+  }, pageUrl);
+  return forms.map((form) => {
+    const likely = classifyForm(form.form_text, form.fields);
+    const { form_text: _discarded, ...evidence } = form;
+    return {
+      ...evidence,
+      form_signature: formSignature(form),
+      likely_form_type: likely,
+      classification_confidence: likely === "unknown" ? "low" : "medium",
+      requires_manual_config: true,
+      notes: "Passive detection only; no values recorded.",
+    };
+  });
+}
+
+export function formTemplate(form) {
+  return {
+    url: form.page_url,
+    name: `review-form-${form.form_signature || form.form_index}`,
+    submissionAllowed: false,
+    manualReviewRequired: true,
+    actions: form.fields.map((field) => ({
+      type: field.input_type === "checkbox" ? "check" : field.element === "select" ? "select" : "fill",
+      selector: field.candidate_selector,
+      value: "",
+    })),
+    notes: "Generated template requires manual review; contains no real values.",
+  };
+}

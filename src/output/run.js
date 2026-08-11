@@ -24,15 +24,19 @@ export async function createRun({ domain, mode, inputs = {}, root = 'output' }) 
 }
 
 export async function uniqueHarPath(run, url, index = 0) {
+  const canonical = new URL(url).href;
   const digest = crypto
     .createHash('sha256')
-    .update(`${url}|${index}|${Date.now()}|${crypto.randomUUID()}`)
+    .update(canonical)
     .digest('hex')
     .slice(0, 10);
-
+  const sequence = String(index + 1).padStart(4, '0');
+  const suffix = `-${digest}.har`;
+  const maximumSlugLength = 180 - sequence.length - suffix.length - 1;
+  const slug = safeSlug(url).slice(0, maximumSlugLength).replace(/-+$/g, '') || 'page';
   return path.join(
     run.dir,
     'har',
-    `${String(index + 1).padStart(4, '0')}-${safeSlug(url)}-${digest}.har`,
+    `${sequence}-${slug}${suffix}`,
   );
 }
