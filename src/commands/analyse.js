@@ -1,0 +1,84 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { ingestHar, crediblePage } from "../har/ingest.js";
+import { createRun } from "../output/run.js";
+import { writeReports } from "../output/write.js";
+import { diagnose } from "../diagnostics/index.js";
+import { safeMessage } from "../utils/redact.js";
+export async function analyse({ har, harDir, outputRoot }) {
+  let files = har
+    ? [har]
+    : (await fs.readdir(harDir, { withFileTypes: true }))
+        .filter((x) => x.isFile() && x.name.toLowerCase().endsWith(".har"))
+        .map((x) => path.join(harDir, x.name))
+        .sort();
+  if (!files.length) throw new Error("No HAR files found");
+  let manifest = [];
+  for (const candidate of [
+    harDir && path.join(harDir, "capture-manifest.json"),
+    harDir && path.join(path.dirname(harDir), "capture-manifest.json"),
+  ].filter(Boolean))
+    try {
+      manifest = JSON.parse(await fs.readFile(candidate, "utf8"));
+      break;
+    } catch {}
+  let domain = "unknown";
+  for (const f of files)
+    try {
+      const h = JSON.parse(await fs.readFile(f));
+      domain = crediblePage(h) || domain;
+      if (domain !== "unknown") break;
+    } catch {}
+  const run = await createRun({
+    domain,
+    mode: har ? "analyse-har" : "analyse-har-dir",
+    inputs: { har, har_dir: harDir, original_sources: files },
+    root: outputRoot,
+  });
+  let requests = [],
+    errors = [],
+    copied = [];
+  for (const f of files)
+    try {
+      const dest = path.join(run.dir, "har", path.basename(f));
+      await fs.copyFile(f, dest);
+      copied.push(dest);
+      requests.push(
+        ...(await ingestHar(f, {
+          runId: run.runId,
+          primaryDomain: run.primaryDomain,
+          capturedAt: run.startedAt,
+          manifest: manifest.find?.(
+            (item) => item.source_har_file === path.basename(f),
+          ),
+        })),
+      );
+    } catch (e) {
+      errors.push({
+        timestamp: new Date().toISOString(),
+        mode: run.mode,
+        page_url: null,
+        source_har: f,
+        interaction: null,
+        action_index: null,
+        category: "har_ingestion",
+        message: safeMessage(e),
+        continued: true,
+      });
+    }
+  diagnose(requests);
+  const summary = await writeReports(run, {
+    requests,
+    errors,
+    manifest,
+    summary: {
+      har_files: copied,
+      original_sources: files,
+      domains: [...new Set(requests.map((r) => r.hostname))],
+      attempted_count: files.length,
+      completed_count: files.length - errors.length,
+      failed_count: errors.length,
+    },
+  });
+  return { run, summary };
+}

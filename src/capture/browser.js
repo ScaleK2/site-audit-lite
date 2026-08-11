@@ -1,0 +1,166 @@
+import { chromium } from "playwright";
+import { detectForms, formTemplate } from "./forms.js";
+import { uniqueHarPath } from "../output/run.js";
+import { safeMessage } from "../utils/redact.js";
+import { maySubmit } from "../input/config.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+export async function captureUrls(
+  run,
+  items,
+  {
+    waitMs = 500,
+    interactions = [],
+    confirmSubmissions = false,
+    discover,
+  } = {},
+) {
+  const browser = await chromium.launch();
+  const result = {
+    harFiles: [],
+    manifest: [],
+    forms: [],
+    templates: [],
+    errors: [],
+    completed: 0,
+    interactions: 0,
+    submissions: 0,
+    discovered: [],
+  };
+  try {
+    for (let index = 0; index < items.length; index++) {
+      const url = items[index],
+        har = await uniqueHarPath(run, url, index);
+      let context,
+        finalUrl = null,
+        outcome = "failed",
+        observed = [];
+      try {
+        context = await browser.newContext({
+          recordHar: { path: har, mode: "full", content: "embed" },
+        });
+        const page = await context.newPage();
+        let observation = "page_load";
+        page.on("request", (r) =>
+          observed.push({
+            url: r.url(),
+            method: r.method(),
+            context: observation,
+          }),
+        );
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        finalUrl = page.url();
+        await page.waitForTimeout(waitMs);
+        const forms = await detectForms(page, url);
+        result.forms.push(...forms);
+        result.templates.push(...forms.map(formTemplate));
+        if (discover)
+          result.discovered.push(
+            ...(await page
+              .locator("a[href]")
+              .evaluateAll((as) => as.map((a) => a.href))),
+          );
+        for (const interaction of interactions.filter(
+          (i) => i.url === page.url(),
+        )) {
+          observation = interaction.name;
+          for (let ai = 0; ai < interaction.actions.length; ai++) {
+            const a = interaction.actions[ai];
+            try {
+              const submit = maySubmit(a);
+              if (
+                submit &&
+                !(interaction.submissionAllowed && confirmSubmissions)
+              )
+                throw new Error(
+                  "Submit-capable action blocked: requires submissionAllowed and explicit confirmation",
+                );
+              if (a.type === "wait")
+                await page.waitForTimeout(a.milliseconds ?? a.value ?? 0);
+              else if (a.type === "click")
+                await page.locator(a.selector).click();
+              else if (a.type === "fill")
+                await page.locator(a.selector).fill(a.value ?? "");
+              else if (a.type === "select")
+                await page.locator(a.selector).selectOption(a.value);
+              else if (a.type === "check")
+                await page.locator(a.selector).check();
+              else if (a.type === "uncheck")
+                await page.locator(a.selector).uncheck();
+              else if (a.type === "press")
+                await page.locator(a.selector).press(a.key ?? a.value);
+              result.interactions++;
+              if (submit) result.submissions++;
+            } catch (e) {
+              result.errors.push(
+                error(
+                  run.mode,
+                  url,
+                  null,
+                  interaction.name,
+                  ai,
+                  "interaction",
+                  e,
+                ),
+              );
+            }
+          }
+        }
+        result.completed++;
+        outcome = "completed";
+      } catch (e) {
+        result.errors.push(
+          error(run.mode, url, null, null, null, "capture", e),
+        );
+      } finally {
+        if (context) {
+          await context.close();
+          try {
+            const h = JSON.parse(await fs.readFile(har, "utf8")),
+              pending = [...observed];
+            for (const entry of h.log?.entries || []) {
+              const at = pending.findIndex(
+                (x) =>
+                  x.url === entry.request?.url &&
+                  x.method === entry.request?.method,
+              );
+              if (at >= 0)
+                entry._observation_context = pending.splice(at, 1)[0].context;
+            }
+            await fs.writeFile(har, JSON.stringify(h));
+          } catch {}
+        }
+      }
+      result.manifest.push({
+        source_har_file: path.basename(har),
+        requested_page_url: url,
+        final_page_url: finalUrl,
+        capture_outcome: outcome,
+        observation_context: "page_load",
+      });
+      result.harFiles.push(har);
+    }
+  } finally {
+    await browser.close();
+  }
+  return result;
+}
+const error = (
+  mode,
+  page_url,
+  source_har,
+  interaction,
+  action_index,
+  category,
+  e,
+) => ({
+  timestamp: new Date().toISOString(),
+  mode,
+  page_url,
+  source_har,
+  interaction,
+  action_index,
+  category,
+  message: safeMessage(e),
+  continued: true,
+});

@@ -147,3 +147,6 @@ Live smoke tests use harmless pages and never submit forms.
 ## 14. Definition of done
 
 All modes work through the menu and documented CLI; outputs match this contract; tests and safe smoke tests pass; README matches reality; evidence is traceable; secrets do not leak; and the diff contains no live HARs, generated runs, `.env`, credentials, or personal data.
+
+## 15. Progressive evidence clarification
+All modes share one normalisation and reporting pipeline. Required progressive CSV/JSON reports are executive summary, technology inventory, page technology matrix, event inventory, domain inventory, consent diagnostics, unknown technologies, and safe request evidence. `tracking-events` is the event-inventory compatibility view. Only beacon, conversion, and attribution roles are events. GA4 requires combined endpoint, `v=2`, valid `G-*`, and host or corroborating payload evidence. Consent signals do not prove state, banner behaviour, or compliance. Live manifests preserve requested/final URLs; unavailable attribution is never fabricated. Default reports omit query values, bodies, cookies, credentials, and client/session identifiers while controlled forensic JSON retains required raw evidence.
