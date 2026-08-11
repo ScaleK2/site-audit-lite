@@ -130,3 +130,10 @@ Tests use only small synthetic inputs. Browser installation may require access t
 ## Limitations
 
 The reports describe observed evidence, not downstream acceptance or correctness. Capture cannot bypass authentication, CAPTCHA, consent, or browser/network restrictions. External HARs with no credible navigation/page metadata report page attribution as unavailable rather than inventing it. The tracking view intentionally excludes generic assets and infrastructure, while the complete inventory retains them.
+
+## Progressive analyst reports
+All interactive and direct CLI modes share the same classifier, HAR ingestion, attribution, and report writer. Runs produce CSV and JSON for `executive-summary`, `technology-inventory`, `page-technology-matrix`, `event-inventory`, `domain-inventory`, `consent-diagnostics`, `unknown-technologies`, and safe `request-evidence`. `tracking-events` remains a compatibility copy of event inventory and excludes libraries, configuration, diagnostics, enrichment, identity support, and assets. Full forensic URLs and parameters remain only in controlled `request-inventory.json`; default reports use safe paths and HAR entry references without query values, bodies, cookies, credentials, client IDs, or session IDs.
+
+GA4 requires a supported collection path, `v=2`, a valid `G-*` measurement ID, and either a Google Analytics host or corroborating GA4 parameters for a first-party endpoint. `/collect` alone is insufficient. Google `UA-*`, `GT-*`, `GTM-*`, `AW-*`, and `DC-*` identifiers remain distinct. Meta library/configuration/beacon evidence, Adobe products, and TikTok events versus diagnostics/enrichment are reported separately.
+
+Live capture records requested/final URLs and outcomes in `capture-manifest.json`; attribution uses manifest, HAR page, reliable page parameter, referer, then unavailable. Consent parameters such as `gcd`, `dma`, and `npa` indicate signalling only: default/update states are not verified, accept/reject are not tested, and compliance is not assessed. CSV/JSON are used instead of XLSX to avoid a new workbook dependency.
